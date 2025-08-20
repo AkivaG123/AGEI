@@ -392,6 +392,8 @@ def update_sheet_enhanced(sheet_id, sheet_name, row_number, transcript_url, work
             body={"values": [workflow_values]}
         ).execute()
         
+        logger.info(f"Workflow update completed successfully")        
+        
         # Update decision logic columns (P through V)
         decision_range = f"{sheet_name}!P{row_number}:V{row_number}"
         service.spreadsheets().values().update(
@@ -400,6 +402,8 @@ def update_sheet_enhanced(sheet_id, sheet_name, row_number, transcript_url, work
             valueInputOption="RAW",
             body={"values": [decision_values]}
         ).execute()
+
+        logger.info(f"Decision logic update completed successfully")
         
         logger.info(f"Updated sheet row {row_number} with enhanced analysis")
         return True
@@ -854,15 +858,4 @@ def analyze_decision_tree_endpoint():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=False)
-
-# Combine all values
-all_values = workflow_values + decision_values
-combined_range = f"{sheet_name}!G{row_number}:V{row_number}"
-
-service.spreadsheets().values().update(
-    spreadsheetId=sheet_id,
-    range=combined_range,
-    valueInputOption="RAW",
-    body={"values": [all_values]}
-).execute()
 
