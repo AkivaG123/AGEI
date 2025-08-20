@@ -600,3 +600,262 @@ def analyze_patterns_endpoint():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=False)
+
+# === Decision Tree Analysis Enhancement ===
+# Add these functions to your existing main.py
+
+def analyze_decision_logic(transcript, patient_context):
+    """Extract decision tree logic from the call transcript"""
+    try:
+        decision_prompt = f"""
+You are analyzing a medical practice scheduling call to extract the decision-making logic and workflow patterns.
+
+PATIENT CONTEXT:
+- Patient Name: {patient_context.get('patient_name', 'Unknown')}
+- Final Appointment Type: {patient_context.get('appointment_type', 'Unknown')}
+- Final Appointment Reason: {patient_context.get('appointment_reason', 'Unknown')}
+
+CALL TRANSCRIPT:
+{transcript}
+
+ANALYSIS INSTRUCTIONS:
+Extract the decision-making flow from this call. Focus on the logical sequence of questions and responses that led to the final appointment type and provider selection.
+
+Return your analysis in this EXACT format:
+
+**DECISION_SEQUENCE:**
+[List each decision point in order: Question → Response → Next Action/Question]
+
+**PATIENT_TYPE_DETERMINATION:**
+[How did the agent determine if patient was new/existing? What questions were asked?]
+
+**SYMPTOM_ASSESSMENT:**
+[What symptoms/conditions were identified? How did these influence the appointment type?]
+
+**PROVIDER_SELECTION_LOGIC:**
+[What factors determined which provider was selected? Specialization, availability, patient preference?]
+
+**APPOINTMENT_TYPE_LOGIC:**
+[What led to the specific appointment type selection? Connection between symptoms and appointment type?]
+
+**SCHEDULING_CONSTRAINTS:**
+[What scheduling factors were considered? Time preferences, urgency, availability?]
+
+**DECISION_BRANCHES:**
+[Identify key decision points where the conversation could have gone different directions based on different responses]
+
+**ROUTING_RULES:**
+[What implicit or explicit rules governed how this patient was routed? Emergency protocols, specialist requirements, etc.]
+
+Focus on extracting the logical decision flow that could be replicated in a decision tree.
+"""
+        
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a workflow decision analyst. Extract the logical decision-making patterns that determine how patients are routed and scheduled."},
+                {"role": "user", "content": decision_prompt}
+            ],
+            temperature=0.1
+        )
+        
+        result = response.choices[0].message.content
+        logger.info("Successfully analyzed decision logic")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Decision logic analysis failed: {e}")
+        raise Exception(f"Decision analysis failed: {str(e)}")
+
+def build_decision_tree_from_calls(calls_data):
+    """Build decision tree structure from multiple calls"""
+    try:
+        # Prepare aggregated decision data
+        decision_summary = []
+        for call in calls_data:
+            summary = f"""
+Call {call['row_number']} - {call['appointment_type']} / {call['appointment_reason']}:
+Decision Logic: {call.get('decision_logic', 'Not available')}
+Patient Type: {call.get('patient_type_determination', 'Not available')}
+Symptoms: {call.get('symptom_assessment', 'Not available')}
+Provider Logic: {call.get('provider_selection_logic', 'Not available')}
+"""
+            decision_summary.append(summary)
+        
+        tree_prompt = f"""
+You are building a comprehensive decision tree for medical practice scheduling based on multiple call examples.
+
+CALL DATA:
+{chr(10).join(decision_summary)}
+
+DECISION TREE CONSTRUCTION INSTRUCTIONS:
+Analyze these calls to build a structured decision tree that shows:
+
+1. **ROOT DECISION POINTS** - What are the first questions that determine the path?
+2. **BRANCHING LOGIC** - How do patient responses create different pathways?
+3. **PROVIDER ROUTING** - What rules determine provider assignment?
+4. **APPOINTMENT TYPE MAPPING** - How do symptoms/needs map to appointment types?
+
+Create a decision tree structure using this format:
+
+**DECISION_TREE_STRUCTURE:**
+
+```
+START
+├── New Patient?
+│   ├── YES → Collect Basic Demographics
+│   │   └── What brings you in today?
+│   │       ├── Eye Pain/Emergency → Route to Emergency Protocol
+│   │       ├── Routine Eye Exam → Schedule with General Ophthalmologist
+│   │       ├── Specific Condition → Route to Specialist
+│   │       └── Cosmetic Concerns → Route to Cosmetic Specialist
+│   └── NO (Existing Patient) → Verify Identity
+│       └── Reason for Visit?
+│           ├── Follow-up → Check with Previous Provider
+│           └── New Issue → Assess Symptoms
+```
+
+**DECISION_RULES:**
+[List the specific rules that govern routing decisions]
+
+**PROVIDER_SPECIALIZATIONS:**
+[Map which providers handle which conditions/appointment types]
+
+**APPOINTMENT_TYPE_MATRIX:**
+[Show how patient needs map to appointment types]
+
+**EXCEPTION_HANDLING:**
+[How are special cases, emergencies, or complex cases handled?]
+
+Focus on creating a reusable decision tree that new staff could follow.
+"""
+        
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a healthcare operations consultant specializing in creating standardized decision trees for patient scheduling workflows."},
+                {"role": "user", "content": tree_prompt}
+            ],
+            temperature=0.1
+        )
+        
+        result = response.choices[0].message.content
+        logger.info(f"Successfully built decision tree from {len(calls_data)} calls")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Decision tree building failed: {e}")
+        raise Exception(f"Decision tree building failed: {str(e)}")
+
+def parse_decision_analysis(analysis_text):
+    """Parse the decision analysis into structured fields"""
+    fields = {
+        "DECISION_SEQUENCE": "",
+        "PATIENT_TYPE_DETERMINATION": "",
+        "SYMPTOM_ASSESSMENT": "",
+        "PROVIDER_SELECTION_LOGIC": "",
+        "APPOINTMENT_TYPE_LOGIC": "",
+        "SCHEDULING_CONSTRAINTS": "",
+        "DECISION_BRANCHES": "",
+        "ROUTING_RULES": ""
+    }
+    
+    # Use regex to extract fields
+    for field_name in fields.keys():
+        pattern = rf'\*\*{re.escape(field_name)}:\*\*\s*(.+?)(?=\*\*|\Z)'
+        match = re.search(pattern, analysis_text, re.DOTALL | re.IGNORECASE)
+        if match:
+            extracted = match.group(1).strip()
+            extracted = re.sub(r'^\[|\]$', '', extracted)
+            fields[field_name] = extracted
+        else:
+            logger.warning(f"Could not extract decision field: {field_name}")
+    
+    return fields
+
+def save_decision_tree_analysis(sheet_id, decision_tree, calls_analyzed):
+    """Save decision tree analysis to a separate sheet"""
+    try:
+        creds = get_service_account_credentials(SHEETS_SCOPES)
+        service = build('sheets', 'v4', credentials=creds)
+        
+        # Create Decision Tree Analysis sheet if it doesn't exist
+        try:
+            sheet_metadata = service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+            sheets = sheet_metadata.get('sheets', [])
+            tree_sheet_exists = any(sheet['properties']['title'] == 'Decision Tree Analysis' for sheet in sheets)
+            
+            if not tree_sheet_exists:
+                request = {
+                    'addSheet': {
+                        'properties': {
+                            'title': 'Decision Tree Analysis'
+                        }
+                    }
+                }
+                service.spreadsheets().batchUpdate(
+                    spreadsheetId=sheet_id,
+                    body={'requests': [request]}
+                ).execute()
+                logger.info("Created 'Decision Tree Analysis' sheet")
+        
+        except Exception as e:
+            logger.warning(f"Could not create Decision Tree Analysis sheet: {e}")
+        
+        # Prepare the data
+        from datetime import datetime
+        timestamp = str(datetime.now())
+        header_row = [f"Decision Tree Analysis - {timestamp}", f"Based on calls: {', '.join(map(str, calls_analyzed))}"]
+        tree_rows = decision_tree.split('\n')
+        
+        # Insert the data
+        values = [header_row, []] + [[row] for row in tree_rows]
+        
+        service.spreadsheets().values().append(
+            spreadsheetId=sheet_id,
+            range="Decision Tree Analysis!A:A",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": values}
+        ).execute()
+        
+        logger.info("Successfully saved decision tree analysis")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to save decision tree analysis: {e}")
+        return False
+
+# New endpoint for decision tree analysis
+@app.route('/analyze-decision-tree', methods=['POST'])
+def analyze_decision_tree_endpoint():
+    """Endpoint for building decision trees from call data"""
+    try:
+        data = request.json
+        
+        if not data or 'calls_data' not in data:
+            raise Exception("No calls data provided")
+        
+        calls_data = data['calls_data']
+        sheet_id = data.get('sheet_id')
+        
+        logger.info(f"Building decision tree from {len(calls_data)} calls")
+        
+        # Build decision tree
+        decision_tree = build_decision_tree_from_calls(calls_data)
+        
+        # Save to sheet
+        calls_analyzed = [call['row_number'] for call in calls_data]
+        save_decision_tree_analysis(sheet_id, decision_tree, calls_analyzed)
+        
+        logger.info("Decision tree analysis completed successfully")
+        return jsonify({
+            "status": "success",
+            "calls_analyzed": len(calls_data),
+            "decision_tree": decision_tree
+        })
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error in decision tree analysis: {error_msg}")
+        return jsonify({"error": error_msg}), 500
