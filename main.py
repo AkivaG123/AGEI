@@ -1,10 +1,11 @@
-# === AGEI Call Analysis Python Webhook ===
+# === AGEI Call Analysis Python Webhook - Enhanced with Decision Tree Analysis ===
 from flask import Flask, request, jsonify
 import requests, os, openai
 import tempfile, subprocess
 import logging
 import re
 import json
+from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -70,7 +71,14 @@ COLUMNS = {
     'FINAL_STEPS': 12,        # L
     'SUMMARY': 13,            # M
     'TRANSCRIPT_LINK': 14,    # N
-    'STATUS': 15              # O
+    'STATUS': 15,             # O
+    'DECISION_SEQUENCE': 16,  # P
+    'PATIENT_TYPE_DETERMINATION': 17, # Q
+    'SYMPTOM_ASSESSMENT': 18, # R
+    'PROVIDER_SELECTION_LOGIC': 19, # S
+    'APPOINTMENT_TYPE_LOGIC': 20, # T
+    'ROUTING_RULES': 21,      # U
+    'DECISION_BRANCHES': 22   # V
 }
 
 # === HELPER FUNCTIONS ===
@@ -168,11 +176,11 @@ Reconstructed conversation:
         logger.error(f"Conversation reconstruction failed: {e}")
         raise Exception(f"Reconstruction failed: {str(e)}")
 
-def analyze_scheduling_workflow(transcript, patient_context):
-    """Analyze the scheduling workflow from the call transcript"""
+def analyze_scheduling_workflow_enhanced(transcript, patient_context):
+    """Enhanced analysis that includes both workflow and decision logic"""
     try:
         analysis_prompt = f"""
-You are analyzing a medical practice scheduling call to understand the workflow and qualifying questions used.
+You are analyzing a medical practice scheduling call to understand both the workflow AND the decision-making logic used.
 
 PATIENT CONTEXT:
 - Patient Name: {patient_context.get('patient_name', 'Unknown')}
@@ -185,54 +193,75 @@ CALL TRANSCRIPT:
 {transcript}
 
 ANALYSIS INSTRUCTIONS:
-Please analyze this call and extract information for each workflow phase. For each section, focus on WHAT was asked/discussed, not how well it was done.
+Analyze this call for both workflow documentation AND decision tree logic extraction.
 
 Return your analysis in this EXACT format:
 
 **INITIAL_QUESTIONS:**
-[List the qualifying questions the agent asked to understand the patient's needs - e.g., "What symptoms are you experiencing?", "Who referred you?", "What type of consultation do you need?"]
+[List the qualifying questions the agent asked to understand the patient's needs]
 
 **INITIAL_RESPONSES:**
-[List the patient's key responses to those questions - e.g., "Dry eyes and blurry vision", "Self-referred", "Eye exam for cataract concerns"]
+[List the patient's key responses to those questions]
 
 **DEMOGRAPHICS:**
-[List what demographic/contact information was collected - e.g., "Name, date of birth, phone number, address, insurance information"]
+[List what demographic/contact information was collected]
 
 **SCHEDULING_QUESTIONS:**
-[List questions asked about scheduling preferences - e.g., "What location do you prefer?", "What days work best for you?", "Morning or afternoon preference?"]
+[List questions asked about scheduling preferences]
 
 **SCHEDULING_RESPONSES:**
-[List the patient's scheduling preferences - e.g., "Main office location", "Weekdays only", "Morning appointments preferred"]
+[List the patient's scheduling preferences]
 
 **FINAL_STEPS:**
-[List administrative/final steps discussed - e.g., "Provided parking information", "Mentioned intake paperwork", "Confirmed appointment details", "Gave office phone number"]
+[List administrative/final steps discussed]
 
 **SUMMARY:**
 [2-3 sentence summary of the overall call and outcome]
 
-Focus on documenting the actual workflow used, not evaluating effectiveness.
+**DECISION_SEQUENCE:**
+[Map the logical flow: Question → Response → Next Action/Decision. Show how each answer led to the next step]
+
+**PATIENT_TYPE_DETERMINATION:**
+[How was patient type (new/existing) determined? What questions/responses led to this?]
+
+**SYMPTOM_ASSESSMENT:**
+[What symptoms were identified and how did they influence appointment routing?]
+
+**PROVIDER_SELECTION_LOGIC:**
+[What factors determined provider selection? Specialization, availability, symptoms, patient preference?]
+
+**APPOINTMENT_TYPE_LOGIC:**
+[What logic connected the patient's needs to the specific appointment type selected?]
+
+**ROUTING_RULES:**
+[What rules or protocols governed how this patient was handled? Emergency procedures, specialist requirements, etc.]
+
+**DECISION_BRANCHES:**
+[Identify key points where different patient responses would have led to different outcomes]
+
+Focus on extracting both the workflow used AND the decision logic that could be replicated.
 """
         
         response = openai.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are a medical scheduling workflow analyst. Extract the specific questions asked and responses given during each phase of the scheduling process."},
+                {"role": "system", "content": "You are both a workflow analyst and decision logic specialist. Extract both the process used and the logical decision-making patterns."},
                 {"role": "user", "content": analysis_prompt}
             ],
             temperature=0.1
         )
         
         result = response.choices[0].message.content
-        logger.info("Successfully analyzed scheduling workflow")
+        logger.info("Successfully analyzed enhanced workflow and decision logic")
         return result
         
     except Exception as e:
-        logger.error(f"Workflow analysis failed: {e}")
-        raise Exception(f"Analysis failed: {str(e)}")
+        logger.error(f"Enhanced workflow analysis failed: {e}")
+        raise Exception(f"Enhanced analysis failed: {str(e)}")
 
-def parse_workflow_analysis(analysis_text):
-    """Parse the structured workflow analysis into separate fields"""
-    fields = {
+def parse_enhanced_analysis(analysis_text):
+    """Parse the enhanced analysis into workflow and decision fields"""
+    workflow_fields = {
         "INITIAL_QUESTIONS": "",
         "INITIAL_RESPONSES": "",
         "DEMOGRAPHICS": "",
@@ -242,20 +271,30 @@ def parse_workflow_analysis(analysis_text):
         "SUMMARY": ""
     }
     
+    decision_fields = {
+        "DECISION_SEQUENCE": "",
+        "PATIENT_TYPE_DETERMINATION": "",
+        "SYMPTOM_ASSESSMENT": "",
+        "PROVIDER_SELECTION_LOGIC": "",
+        "APPOINTMENT_TYPE_LOGIC": "",
+        "ROUTING_RULES": "",
+        "DECISION_BRANCHES": ""
+    }
+    
+    all_fields = {**workflow_fields, **decision_fields}
+    
     # Use regex to extract fields
-    for field_name in fields.keys():
+    for field_name in all_fields.keys():
         pattern = rf'\*\*{re.escape(field_name)}:\*\*\s*(.+?)(?=\*\*|\Z)'
         match = re.search(pattern, analysis_text, re.DOTALL | re.IGNORECASE)
         if match:
-            # Clean up the extracted text
             extracted = match.group(1).strip()
-            # Remove leading brackets or formatting
             extracted = re.sub(r'^\[|\]$', '', extracted)
-            fields[field_name] = extracted
+            all_fields[field_name] = extracted
         else:
             logger.warning(f"Could not extract field: {field_name}")
     
-    return fields
+    return workflow_fields, decision_fields
 
 def upload_to_drive(file_path, folder_id):
     """Upload to Drive with better error handling"""
@@ -284,14 +323,44 @@ def upload_to_drive(file_path, folder_id):
         logger.error(f"Drive upload failed: {e}")
         raise Exception(f"Upload failed: {str(e)}")
 
-def update_sheet(sheet_id, sheet_name, row_number, transcript_url, workflow_fields):
-    """Update the Google Sheet with analysis results"""
+def update_sheet_enhanced(sheet_id, sheet_name, row_number, transcript_url, workflow_fields, decision_fields):
+    """Update the Google Sheet with enhanced analysis results"""
     try:
         creds = get_service_account_credentials(SHEETS_SCOPES)
         service = build('sheets', 'v4', credentials=creds)
         
-        # Prepare the values for columns G through O
-        values = [
+        # First, ensure we have the decision logic columns (P through V)
+        # Check current sheet structure and add columns if needed
+        sheet_metadata = service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+        sheets = sheet_metadata.get('sheets', [])
+        
+        target_sheet = None
+        for sheet in sheets:
+            if sheet['properties']['title'] == sheet_name:
+                target_sheet = sheet
+                break
+        
+        if target_sheet:
+            current_columns = target_sheet['properties']['gridProperties'].get('columnCount', 15)
+            if current_columns < 22:  # We need columns A through V (22 columns)
+                # Add more columns
+                requests = [{
+                    'appendDimension': {
+                        'sheetId': target_sheet['properties']['sheetId'],
+                        'dimension': 'COLUMNS',
+                        'length': 22 - current_columns
+                    }
+                }]
+                
+                service.spreadsheets().batchUpdate(
+                    spreadsheetId=sheet_id,
+                    body={'requests': requests}
+                ).execute()
+                
+                logger.info(f"Added columns to support decision logic analysis")
+        
+        # Prepare workflow values (columns G through O)
+        workflow_values = [
             workflow_fields["INITIAL_QUESTIONS"],     # G
             workflow_fields["INITIAL_RESPONSES"],     # H
             workflow_fields["DEMOGRAPHICS"],          # I
@@ -303,22 +372,41 @@ def update_sheet(sheet_id, sheet_name, row_number, transcript_url, workflow_fiel
             "Completed"                              # O
         ]
         
-        # Update range from G to O for the specific row
-        update_range = f"{sheet_name}!G{row_number}:O{row_number}"
+        # Prepare decision logic values (columns P through V)
+        decision_values = [
+            decision_fields["DECISION_SEQUENCE"],        # P
+            decision_fields["PATIENT_TYPE_DETERMINATION"], # Q
+            decision_fields["SYMPTOM_ASSESSMENT"],       # R
+            decision_fields["PROVIDER_SELECTION_LOGIC"], # S
+            decision_fields["APPOINTMENT_TYPE_LOGIC"],   # T
+            decision_fields["ROUTING_RULES"],            # U
+            decision_fields["DECISION_BRANCHES"]         # V
+        ]
         
+        # Update workflow columns (G through O)
+        workflow_range = f"{sheet_name}!G{row_number}:O{row_number}"
         service.spreadsheets().values().update(
             spreadsheetId=sheet_id,
-            range=update_range,
+            range=workflow_range,
             valueInputOption="RAW",
-            body={"values": [values]}
+            body={"values": [workflow_values]}
         ).execute()
         
-        logger.info(f"Updated sheet row {row_number} successfully")
+        # Update decision logic columns (P through V)
+        decision_range = f"{sheet_name}!P{row_number}:V{row_number}"
+        service.spreadsheets().values().update(
+            spreadsheetId=sheet_id,
+            range=decision_range,
+            valueInputOption="RAW",
+            body={"values": [decision_values]}
+        ).execute()
+        
+        logger.info(f"Updated sheet row {row_number} with enhanced analysis")
         return True
         
     except Exception as e:
-        logger.error(f"Sheet update failed: {e}")
-        raise Exception(f"Sheet update failed: {str(e)}")
+        logger.error(f"Enhanced sheet update failed: {e}")
+        raise Exception(f"Enhanced sheet update failed: {str(e)}")
 
 def analyze_patterns(calls_data):
     """Analyze patterns across multiple calls"""
@@ -397,276 +485,6 @@ Focus on actionable insights that could help improve or standardize the scheduli
         logger.error(f"Pattern analysis failed: {e}")
         raise Exception(f"Pattern analysis failed: {str(e)}")
 
-def save_pattern_analysis(sheet_id, pattern_analysis, calls_analyzed):
-    """Save pattern analysis to a separate sheet"""
-    try:
-        creds = get_service_account_credentials(SHEETS_SCOPES)
-        service = build('sheets', 'v4', credentials=creds)
-        
-        # Try to create or update the Patterns Analysis sheet
-        try:
-            # Check if sheet exists
-            sheet_metadata = service.spreadsheets().get(spreadsheetId=sheet_id).execute()
-            sheets = sheet_metadata.get('sheets', [])
-            pattern_sheet_exists = any(sheet['properties']['title'] == 'Patterns Analysis' for sheet in sheets)
-            
-            if not pattern_sheet_exists:
-                # Create the sheet
-                request = {
-                    'addSheet': {
-                        'properties': {
-                            'title': 'Patterns Analysis'
-                        }
-                    }
-                }
-                service.spreadsheets().batchUpdate(
-                    spreadsheetId=sheet_id,
-                    body={'requests': [request]}
-                ).execute()
-                logger.info("Created 'Patterns Analysis' sheet")
-        
-        except Exception as e:
-            logger.warning(f"Could not create Patterns Analysis sheet: {e}")
-        
-        # Prepare the data to insert
-        from datetime import datetime
-        timestamp = str(datetime.now())
-        header_row = [f"Pattern Analysis - {timestamp}", f"Calls Analyzed: {', '.join(map(str, calls_analyzed))}"]
-        analysis_rows = pattern_analysis.split('\n')
-        
-        # Insert the data
-        values = [header_row, []] + [[row] for row in analysis_rows]
-        
-        service.spreadsheets().values().append(
-            spreadsheetId=sheet_id,
-            range="Patterns Analysis!A:A",
-            valueInputOption="RAW",
-            insertDataOption="INSERT_ROWS",
-            body={"values": values}
-        ).execute()
-        
-        logger.info("Successfully saved pattern analysis")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Failed to save pattern analysis: {e}")
-        return False
-
-def cleanup_files(*file_paths):
-    """Safely cleanup temporary files"""
-    for file_path in file_paths:
-        if file_path and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-                logger.info(f"Cleaned up file: {file_path}")
-            except Exception as e:
-                logger.warning(f"Could not remove file {file_path}: {e}")
-
-# === ENDPOINTS ===
-@app.route('/')
-def index():
-    return "AGEI Call Analysis Webhook Service - Ready"
-
-@app.route('/analyze', methods=['POST'])
-def analyze_call():
-    # Initialize file paths for cleanup
-    mp3_path = None
-    left_path = None
-    right_path = None
-    txt_path = None
-    
-    try:
-        data = request.json
-        
-        # Handle test requests
-        if data and data.get('test') == True:
-            logger.info("Test request received")
-            return jsonify({"status": "success", "message": "Webhook is working"})
-        
-        logger.info(f"Processing call: {data.get('file_name', 'unknown') if data else 'No data'}")
-        
-        # Validate required fields
-        if not data:
-            raise Exception("No JSON data received")
-            
-        required_fields = ['file_url', 'file_token', 'sheet_id', 'sheet_name', 
-                          'row_number', 'transcript_folder_id', 'file_name']
-        for field in required_fields:
-            if field not in data:
-                raise Exception(f"Missing required field: {field}")
-        
-        # Extract patient context
-        patient_context = {
-            'patient_name': data.get('patient_name', ''),
-            'mrn': data.get('mrn', ''),
-            'call_scenario': data.get('call_scenario', ''),
-            'appointment_type': data.get('appointment_type', ''),
-            'appointment_reason': data.get('appointment_reason', '')
-        }
-        
-        # Download and process audio
-        mp3_path = download_file(data['file_url'], data['file_token'])
-        left_path, right_path = split_channels(mp3_path)
-        
-        # Transcribe both channels
-        agent_text = transcribe(left_path)
-        patient_text = transcribe(right_path)
-        
-        # Reconstruct conversation
-        full_transcript = reconstruct_conversation(agent_text, patient_text)
-        
-        # Analyze scheduling workflow
-        workflow_analysis = analyze_scheduling_workflow(full_transcript, patient_context)
-        workflow_fields = parse_workflow_analysis(workflow_analysis)
-        
-        # Save transcript file
-        txt_path = mp3_path.replace(".mp3", "_transcript.txt")
-        with open(txt_path, "w", encoding='utf-8') as f:
-            f.write("=== FULL CONVERSATION TRANSCRIPT ===\n\n")
-            f.write(full_transcript)
-            f.write("\n\n=== WORKFLOW ANALYSIS ===\n\n")
-            f.write(workflow_analysis)
-        
-        # Upload to Drive and update sheet
-        transcript_link = upload_to_drive(txt_path, data["transcript_folder_id"])
-        update_sheet(data["sheet_id"], data["sheet_name"], data["row_number"], 
-                    transcript_link, workflow_fields)
-        
-        logger.info(f"Successfully processed call: {data['file_name']}")
-        return jsonify({
-            "status": "success", 
-            "transcript_link": transcript_link,
-            "workflow_fields": workflow_fields
-        })
-        
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Error processing call: {error_msg}")
-        
-        # Try to update sheet with error status
-        try:
-            if 'data' in locals() and data:
-                creds = get_service_account_credentials(SHEETS_SCOPES)
-                service = build('sheets', 'v4', credentials=creds)
-                
-                error_range = f"{data['sheet_name']}!O{data['row_number']}"
-                service.spreadsheets().values().update(
-                    spreadsheetId=data["sheet_id"],
-                    range=error_range,
-                    valueInputOption="RAW",
-                    body={"values": [[f"ERROR: {error_msg}"]]}
-                ).execute()
-        except:
-            logger.error("Could not update sheet with error status")
-        
-        return jsonify({"error": error_msg}), 500
-        
-    finally:
-        # Clean up all temporary files
-        cleanup_files(mp3_path, left_path, right_path, txt_path)
-
-@app.route('/analyze-patterns', methods=['POST'])
-def analyze_patterns_endpoint():
-    """Endpoint for pattern analysis across multiple calls"""
-    try:
-        data = request.json
-        
-        if not data or 'calls_data' not in data:
-            raise Exception("No calls data provided")
-        
-        calls_data = data['calls_data']
-        sheet_id = data.get('sheet_id')
-        
-        logger.info(f"Running pattern analysis on {len(calls_data)} calls")
-        
-        # Analyze patterns
-        pattern_analysis = analyze_patterns(calls_data)
-        
-        # Save to sheet
-        calls_analyzed = [call['row_number'] for call in calls_data]
-        save_pattern_analysis(sheet_id, pattern_analysis, calls_analyzed)
-        
-        logger.info("Pattern analysis completed successfully")
-        return jsonify({
-            "status": "success",
-            "calls_analyzed": len(calls_data),
-            "pattern_analysis": pattern_analysis
-        })
-        
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Error in pattern analysis: {error_msg}")
-        return jsonify({"error": error_msg}), 500
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=False)
-
-# === Decision Tree Analysis Enhancement ===
-# Add these functions to your existing main.py
-
-def analyze_decision_logic(transcript, patient_context):
-    """Extract decision tree logic from the call transcript"""
-    try:
-        decision_prompt = f"""
-You are analyzing a medical practice scheduling call to extract the decision-making logic and workflow patterns.
-
-PATIENT CONTEXT:
-- Patient Name: {patient_context.get('patient_name', 'Unknown')}
-- Final Appointment Type: {patient_context.get('appointment_type', 'Unknown')}
-- Final Appointment Reason: {patient_context.get('appointment_reason', 'Unknown')}
-
-CALL TRANSCRIPT:
-{transcript}
-
-ANALYSIS INSTRUCTIONS:
-Extract the decision-making flow from this call. Focus on the logical sequence of questions and responses that led to the final appointment type and provider selection.
-
-Return your analysis in this EXACT format:
-
-**DECISION_SEQUENCE:**
-[List each decision point in order: Question → Response → Next Action/Question]
-
-**PATIENT_TYPE_DETERMINATION:**
-[How did the agent determine if patient was new/existing? What questions were asked?]
-
-**SYMPTOM_ASSESSMENT:**
-[What symptoms/conditions were identified? How did these influence the appointment type?]
-
-**PROVIDER_SELECTION_LOGIC:**
-[What factors determined which provider was selected? Specialization, availability, patient preference?]
-
-**APPOINTMENT_TYPE_LOGIC:**
-[What led to the specific appointment type selection? Connection between symptoms and appointment type?]
-
-**SCHEDULING_CONSTRAINTS:**
-[What scheduling factors were considered? Time preferences, urgency, availability?]
-
-**DECISION_BRANCHES:**
-[Identify key decision points where the conversation could have gone different directions based on different responses]
-
-**ROUTING_RULES:**
-[What implicit or explicit rules governed how this patient was routed? Emergency protocols, specialist requirements, etc.]
-
-Focus on extracting the logical decision flow that could be replicated in a decision tree.
-"""
-        
-        response = openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a workflow decision analyst. Extract the logical decision-making patterns that determine how patients are routed and scheduled."},
-                {"role": "user", "content": decision_prompt}
-            ],
-            temperature=0.1
-        )
-        
-        result = response.choices[0].message.content
-        logger.info("Successfully analyzed decision logic")
-        return result
-        
-    except Exception as e:
-        logger.error(f"Decision logic analysis failed: {e}")
-        raise Exception(f"Decision analysis failed: {str(e)}")
-
 def build_decision_tree_from_calls(calls_data):
     """Build decision tree structure from multiple calls"""
     try:
@@ -679,6 +497,7 @@ Decision Logic: {call.get('decision_logic', 'Not available')}
 Patient Type: {call.get('patient_type_determination', 'Not available')}
 Symptoms: {call.get('symptom_assessment', 'Not available')}
 Provider Logic: {call.get('provider_selection_logic', 'Not available')}
+Workflow Summary: {call.get('summary', 'Not available')}
 """
             decision_summary.append(summary)
         
@@ -747,31 +566,59 @@ Focus on creating a reusable decision tree that new staff could follow.
         logger.error(f"Decision tree building failed: {e}")
         raise Exception(f"Decision tree building failed: {str(e)}")
 
-def parse_decision_analysis(analysis_text):
-    """Parse the decision analysis into structured fields"""
-    fields = {
-        "DECISION_SEQUENCE": "",
-        "PATIENT_TYPE_DETERMINATION": "",
-        "SYMPTOM_ASSESSMENT": "",
-        "PROVIDER_SELECTION_LOGIC": "",
-        "APPOINTMENT_TYPE_LOGIC": "",
-        "SCHEDULING_CONSTRAINTS": "",
-        "DECISION_BRANCHES": "",
-        "ROUTING_RULES": ""
-    }
-    
-    # Use regex to extract fields
-    for field_name in fields.keys():
-        pattern = rf'\*\*{re.escape(field_name)}:\*\*\s*(.+?)(?=\*\*|\Z)'
-        match = re.search(pattern, analysis_text, re.DOTALL | re.IGNORECASE)
-        if match:
-            extracted = match.group(1).strip()
-            extracted = re.sub(r'^\[|\]$', '', extracted)
-            fields[field_name] = extracted
-        else:
-            logger.warning(f"Could not extract decision field: {field_name}")
-    
-    return fields
+def save_pattern_analysis(sheet_id, pattern_analysis, calls_analyzed):
+    """Save pattern analysis to a separate sheet"""
+    try:
+        creds = get_service_account_credentials(SHEETS_SCOPES)
+        service = build('sheets', 'v4', credentials=creds)
+        
+        # Try to create or update the Patterns Analysis sheet
+        try:
+            # Check if sheet exists
+            sheet_metadata = service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+            sheets = sheet_metadata.get('sheets', [])
+            pattern_sheet_exists = any(sheet['properties']['title'] == 'Patterns Analysis' for sheet in sheets)
+            
+            if not pattern_sheet_exists:
+                # Create the sheet
+                request = {
+                    'addSheet': {
+                        'properties': {
+                            'title': 'Patterns Analysis'
+                        }
+                    }
+                }
+                service.spreadsheets().batchUpdate(
+                    spreadsheetId=sheet_id,
+                    body={'requests': [request]}
+                ).execute()
+                logger.info("Created 'Patterns Analysis' sheet")
+        
+        except Exception as e:
+            logger.warning(f"Could not create Patterns Analysis sheet: {e}")
+        
+        # Prepare the data to insert
+        timestamp = str(datetime.now())
+        header_row = [f"Pattern Analysis - {timestamp}", f"Calls Analyzed: {', '.join(map(str, calls_analyzed))}"]
+        analysis_rows = pattern_analysis.split('\n')
+        
+        # Insert the data
+        values = [header_row, []] + [[row] for row in analysis_rows]
+        
+        service.spreadsheets().values().append(
+            spreadsheetId=sheet_id,
+            range="Patterns Analysis!A:A",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": values}
+        ).execute()
+        
+        logger.info("Successfully saved pattern analysis")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to save pattern analysis: {e}")
+        return False
 
 def save_decision_tree_analysis(sheet_id, decision_tree, calls_analyzed):
     """Save decision tree analysis to a separate sheet"""
@@ -803,7 +650,6 @@ def save_decision_tree_analysis(sheet_id, decision_tree, calls_analyzed):
             logger.warning(f"Could not create Decision Tree Analysis sheet: {e}")
         
         # Prepare the data
-        from datetime import datetime
         timestamp = str(datetime.now())
         header_row = [f"Decision Tree Analysis - {timestamp}", f"Based on calls: {', '.join(map(str, calls_analyzed))}"]
         tree_rows = decision_tree.split('\n')
@@ -826,7 +672,153 @@ def save_decision_tree_analysis(sheet_id, decision_tree, calls_analyzed):
         logger.error(f"Failed to save decision tree analysis: {e}")
         return False
 
-# New endpoint for decision tree analysis
+def cleanup_files(*file_paths):
+    """Safely cleanup temporary files"""
+    for file_path in file_paths:
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"Cleaned up file: {file_path}")
+            except Exception as e:
+                logger.warning(f"Could not remove file {file_path}: {e}")
+
+# === ENDPOINTS ===
+@app.route('/')
+def index():
+    return "AGEI Call Analysis Webhook Service - Enhanced with Decision Tree Analysis"
+
+@app.route('/analyze', methods=['POST'])
+def analyze_call():
+    # Initialize file paths for cleanup
+    mp3_path = None
+    left_path = None
+    right_path = None
+    txt_path = None
+    
+    try:
+        data = request.json
+        
+        # Handle test requests
+        if data and data.get('test') == True:
+            logger.info("Test request received")
+            return jsonify({"status": "success", "message": "Webhook is working"})
+        
+        logger.info(f"Processing call: {data.get('file_name', 'unknown') if data else 'No data'}")
+        
+        # Validate required fields
+        if not data:
+            raise Exception("No JSON data received")
+            
+        required_fields = ['file_url', 'file_token', 'sheet_id', 'sheet_name', 
+                          'row_number', 'transcript_folder_id', 'file_name']
+        for field in required_fields:
+            if field not in data:
+                raise Exception(f"Missing required field: {field}")
+        
+        # Extract patient context
+        patient_context = {
+            'patient_name': data.get('patient_name', ''),
+            'mrn': data.get('mrn', ''),
+            'call_scenario': data.get('call_scenario', ''),
+            'appointment_type': data.get('appointment_type', ''),
+            'appointment_reason': data.get('appointment_reason', '')
+        }
+        
+        # Download and process audio
+        mp3_path = download_file(data['file_url'], data['file_token'])
+        left_path, right_path = split_channels(mp3_path)
+        
+        # Transcribe both channels
+        agent_text = transcribe(left_path)
+        patient_text = transcribe(right_path)
+        
+        # Reconstruct conversation
+        full_transcript = reconstruct_conversation(agent_text, patient_text)
+        
+        # Enhanced analysis with decision logic
+        enhanced_analysis = analyze_scheduling_workflow_enhanced(full_transcript, patient_context)
+        workflow_fields, decision_fields = parse_enhanced_analysis(enhanced_analysis)
+        
+        # Save enhanced transcript file
+        txt_path = mp3_path.replace(".mp3", "_enhanced_transcript.txt")
+        with open(txt_path, "w", encoding='utf-8') as f:
+            f.write("=== FULL CONVERSATION TRANSCRIPT ===\n\n")
+            f.write(full_transcript)
+            f.write("\n\n=== ENHANCED WORKFLOW & DECISION ANALYSIS ===\n\n")
+            f.write(enhanced_analysis)
+        
+        # Upload to Drive and update sheet with enhanced data
+        transcript_link = upload_to_drive(txt_path, data["transcript_folder_id"])
+        update_sheet_enhanced(data["sheet_id"], data["sheet_name"], data["row_number"], 
+                             transcript_link, workflow_fields, decision_fields)
+        
+        logger.info(f"Successfully processed call: {data['file_name']}")
+        return jsonify({
+            "status": "success", 
+            "transcript_link": transcript_link,
+            "workflow_fields": workflow_fields,
+            "decision_fields": decision_fields
+        })
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error processing call: {error_msg}")
+        
+        # Try to update sheet with error status
+        try:
+            if 'data' in locals() and data:
+                creds = get_service_account_credentials(SHEETS_SCOPES)
+                service = build('sheets', 'v4', credentials=creds)
+                
+                error_range = f"{data['sheet_name']}!O{data['row_number']}"
+                service.spreadsheets().values().update(
+                    spreadsheetId=data["sheet_id"],
+                    range=error_range,
+                    valueInputOption="RAW",
+                    body={"values": [[f"ERROR: {error_msg}"]]}
+                ).execute()
+        except:
+            logger.error("Could not update sheet with error status")
+        
+        return jsonify({"error": error_msg}), 500
+        
+    finally:
+        # Clean up all temporary files
+        cleanup_files(mp3_path, left_path, right_path, txt_path)
+
+@app.route('/analyze-patterns', methods=['POST'])
+def analyze_patterns_endpoint():
+    """Endpoint for pattern analysis across multiple calls"""
+    try:
+        data = request.json
+        
+        if not data or 'calls_data' not in data:
+            raise Exception("No calls data provided")
+        
+        calls_data = data['calls_data']
+        sheet_id = data.get('sheet_id')
+        
+        logger.info(f"Running pattern analysis on {len(calls_data)} calls")
+        
+        # Analyze patterns
+        pattern_analysis = analyze_patterns(calls_data)
+        
+        # Save to sheet
+        calls_analyzed = [call['row_number'] for call in calls_data]
+        save_pattern_analysis(sheet_id, pattern_analysis, calls_analyzed)
+        
+        logger.info("Pattern analysis completed successfully")
+        return jsonify({
+            "status": "success",
+            "calls_analyzed": len(calls_data),
+            "pattern_analysis": pattern_analysis
+        })
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error in pattern analysis: {error_msg}")
+        return jsonify({"error": error_msg}), 500
+
 @app.route('/analyze-decision-tree', methods=['POST'])
 def analyze_decision_tree_endpoint():
     """Endpoint for building decision trees from call data"""
@@ -859,3 +851,6 @@ def analyze_decision_tree_endpoint():
         error_msg = str(e)
         logger.error(f"Error in decision tree analysis: {error_msg}")
         return jsonify({"error": error_msg}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080, debug=False)
