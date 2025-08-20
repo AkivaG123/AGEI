@@ -16,20 +16,37 @@ SHEETS_SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # Build service account info from environment variables
 def get_service_account_credentials(scopes):
-    service_account_info = {
-        "type": "service_account",
-        "project_id": os.environ['GOOGLE_PROJECT_ID'],
-        "private_key_id": os.environ['GOOGLE_PRIVATE_KEY_ID'],
-        "private_key": os.environ['GOOGLE_PRIVATE_KEY'].replace('\\n', '\n'),
-        "client_email": os.environ['GOOGLE_CLIENT_EMAIL'],
-        "client_id": os.environ['GOOGLE_CLIENT_ID'],
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-        "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{os.environ['GOOGLE_CLIENT_EMAIL']}",
-        "universe_domain": "googleapis.com"
-    }
-    return service_account.Credentials.from_service_account_info(service_account_info, scopes=scopes)
+    try:
+        # Debug: Log which environment variables are available
+        logger.info(f"Available environment variables: {list(os.environ.keys())}")
+        
+        # Check each required variable
+        required_vars = ['GOOGLE_PROJECT_ID', 'GOOGLE_PRIVATE_KEY_ID', 'GOOGLE_PRIVATE_KEY', 'GOOGLE_CLIENT_EMAIL', 'GOOGLE_CLIENT_ID']
+        for var in required_vars:
+            if var not in os.environ:
+                raise Exception(f"Missing environment variable: {var}")
+            logger.info(f"{var} is present")
+        
+        service_account_info = {
+            "type": "service_account",
+            "project_id": os.environ['GOOGLE_PROJECT_ID'],
+            "private_key_id": os.environ['GOOGLE_PRIVATE_KEY_ID'],
+            "private_key": os.environ['GOOGLE_PRIVATE_KEY'].replace('\\n', '\n'),
+            "client_email": os.environ['GOOGLE_CLIENT_EMAIL'],
+            "client_id": os.environ['GOOGLE_CLIENT_ID'],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{os.environ['GOOGLE_CLIENT_EMAIL']}",
+            "universe_domain": "googleapis.com"
+        }
+        
+        logger.info("Successfully built service account info")
+        return service_account.Credentials.from_service_account_info(service_account_info, scopes=scopes)
+        
+    except Exception as e:
+        logger.error(f"Error creating credentials: {str(e)}")
+        raise Exception(f"Credential creation failed: {str(e)}")
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
