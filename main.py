@@ -13,7 +13,23 @@ from googleapiclient.http import MediaFileUpload
 openai.api_key = os.environ['OPENAI_API_KEY']
 DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive']
 SHEETS_SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-SERVICE_ACCOUNT_FILE = 'service_account.json'
+
+# Build service account info from environment variables
+def get_service_account_credentials(scopes):
+    service_account_info = {
+        "type": "service_account",
+        "project_id": os.environ['GOOGLE_PROJECT_ID'],
+        "private_key_id": os.environ['GOOGLE_PRIVATE_KEY_ID'],
+        "private_key": os.environ['GOOGLE_PRIVATE_KEY'].replace('\\n', '\n'),
+        "client_email": os.environ['GOOGLE_CLIENT_EMAIL'],
+        "client_id": os.environ['GOOGLE_CLIENT_ID'],
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{os.environ['GOOGLE_CLIENT_EMAIL']}",
+        "universe_domain": "googleapis.com"
+    }
+    return service_account.Credentials.from_service_account_info(service_account_info, scopes=scopes)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -227,9 +243,7 @@ def parse_workflow_analysis(analysis_text):
 def upload_to_drive(file_path, folder_id):
     """Upload to Drive with better error handling"""
     try:
-        creds = service_account.Credentials.from_service_account_file(
-            SERVICE_ACCOUNT_FILE, scopes=DRIVE_SCOPES
-        )
+        creds = get_service_account_credentials(DRIVE_SCOPES)
         service = build('drive', 'v3', credentials=creds)
         
         file_metadata = {
@@ -256,9 +270,7 @@ def upload_to_drive(file_path, folder_id):
 def update_sheet(sheet_id, sheet_name, row_number, transcript_url, workflow_fields):
     """Update the Google Sheet with analysis results"""
     try:
-        creds = service_account.Credentials.from_service_account_file(
-            SERVICE_ACCOUNT_FILE, scopes=SHEETS_SCOPES
-        )
+        creds = get_service_account_credentials(SHEETS_SCOPES)
         service = build('sheets', 'v4', credentials=creds)
         
         # Prepare the values for columns G through O
@@ -371,9 +383,7 @@ Focus on actionable insights that could help improve or standardize the scheduli
 def save_pattern_analysis(sheet_id, pattern_analysis, calls_analyzed):
     """Save pattern analysis to a separate sheet"""
     try:
-        creds = service_account.Credentials.from_service_account_file(
-            SERVICE_ACCOUNT_FILE, scopes=SHEETS_SCOPES
-        )
+        creds = get_service_account_credentials(SHEETS_SCOPES)
         service = build('sheets', 'v4', credentials=creds)
         
         # Try to create or update the Patterns Analysis sheet
@@ -402,7 +412,8 @@ def save_pattern_analysis(sheet_id, pattern_analysis, calls_analyzed):
             logger.warning(f"Could not create Patterns Analysis sheet: {e}")
         
         # Prepare the data to insert
-        timestamp = str(pd.Timestamp.now()) if 'pd' in globals() else str(datetime.now())
+        from datetime import datetime
+        timestamp = str(datetime.now())
         header_row = [f"Pattern Analysis - {timestamp}", f"Calls Analyzed: {', '.join(map(str, calls_analyzed))}"]
         analysis_rows = pattern_analysis.split('\n')
         
@@ -518,9 +529,7 @@ def analyze_call():
         # Try to update sheet with error status
         try:
             if 'data' in locals() and data:
-                creds = service_account.Credentials.from_service_account_file(
-                    SERVICE_ACCOUNT_FILE, scopes=SHEETS_SCOPES
-                )
+                creds = get_service_account_credentials(SHEETS_SCOPES)
                 service = build('sheets', 'v4', credentials=creds)
                 
                 error_range = f"{data['sheet_name']}!O{data['row_number']}"
