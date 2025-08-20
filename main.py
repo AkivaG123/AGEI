@@ -854,3 +854,15 @@ def analyze_decision_tree_endpoint():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=False)
+
+# Combine all values
+all_values = workflow_values + decision_values
+combined_range = f"{sheet_name}!G{row_number}:V{row_number}"
+
+service.spreadsheets().values().update(
+    spreadsheetId=sheet_id,
+    range=combined_range,
+    valueInputOption="RAW",
+    body={"values": [all_values]}
+).execute()
+
