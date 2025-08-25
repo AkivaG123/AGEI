@@ -859,3 +859,233 @@ def analyze_decision_tree_endpoint():
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=False)
 
+# === FAQ Processing Enhancement - Add to your main.py ===
+
+def analyze_faq_content(transcript):
+    """Extract FAQ-worthy content from call transcript using AGEI-specific prompt"""
+    try:
+        faq_prompt = f"""
+Identity: You are a careful and detail-oriented medical office analyst for Assil Gaur Eye Institute (AGEI). Your task is to review transcripts of calls between patients and the AGEI scheduling/reception team.
+
+Goal: Your goal is to identify any information the agent communicated that could/should be part of a Frequently Asked Questions (FAQ) list for patients. Examples include:
+- Parking instructions or directions
+- When to arrive before an appointment
+- What forms, IDs, insurance cards, or documents to bring
+- Policies about late arrivals, cancellations, or rescheduling
+- Payment or insurance coverage reminders
+- Preparation instructions (e.g., "don't wear contacts before exam")
+- Follow-up visit expectations
+
+Do not include general chit-chat or anything that is not actionable or informational for patients.
+
+Instructions: Read the transcript carefully. Extract agent-provided details that would be useful for other patients if added to a FAQ. Summarize each extracted detail clearly and concisely, in patient-friendly language. If no FAQ-worthy details were given, explicitly state: "No FAQ items mentioned in this call."
+
+CALL TRANSCRIPT:
+{transcript}
+
+Output Format: Respond in the following JSON structure:
+{{
+  "FAQ_Items": [
+    {{
+      "Topic": "Parking validation at Santa Monica office",
+      "FAQ_Text": "You can park in the structure next to the Santa Monica office; bring your ticket for validation."
+    }},
+    {{
+      "Topic": "Arrival time for appointments", 
+      "FAQ_Text": "Please arrive 15 minutes before your scheduled appointment to complete paperwork."
+    }}
+  ],
+  "Notes": "Summaries are based only on what the agent explicitly said in this transcript."
+}}
+"""
+        
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a medical office analyst for AGEI. Extract actionable patient information for FAQ creation. Always respond with valid JSON format."},
+                {"role": "user", "content": faq_prompt}
+            ],
+            temperature=0.1
+        )
+        
+        result = response.choices[0].message.content
+        logger.info("Successfully analyzed FAQ content with AGEI prompt")
+        return result
+        
+    except Exception as e:
+        logger.error(f"FAQ analysis failed: {e}")
+        raise Exception(f"FAQ analysis failed: {str(e)}")
+
+def parse_faq_analysis(analysis_text):
+    """Parse the JSON FAQ analysis response"""
+    try:
+        # Try to extract JSON from the response
+        json_match = re.search(r'\{.*\}', analysis_text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            faq_data = json.loads(json_str)
+            
+            # Extract FAQ items and format for sheet
+            faq_items = faq_data.get('FAQ_Items', [])
+            notes = faq_data.get('Notes', '')
+            
+            # Format FAQ items for display
+            formatted_items = []
+            for item in faq_items:
+                topic = item.get('Topic', '')
+                text = item.get('FAQ_Text', '')
+                if topic and text:
+                    formatted_items.append(f"• {topic}: {text}")
+            
+            return {
+                "FAQ_ITEMS": "\n".join(formatted_items) if formatted_items else "No FAQ items mentioned in this call.",
+                "TOTAL_ITEMS": str(len(formatted_items)),
+                "NOTES": notes,
+                "RAW_JSON": json_str  # Keep raw JSON for potential future use
+            }
+        else:
+            logger.warning("No JSON found in FAQ analysis response")
+            return {
+                "FAQ_ITEMS": "No FAQ items mentioned in this call.",
+                "TOTAL_ITEMS": "0",
+                "NOTES": "Could not parse response",
+                "RAW_JSON": analysis_text
+            }
+            
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON parsing failed: {e}")
+        return {
+            "FAQ_ITEMS": "Error parsing FAQ analysis",
+            "TOTAL_ITEMS": "0", 
+            "NOTES": f"JSON parsing error: {str(e)}",
+            "RAW_JSON": analysis_text
+        }
+    except Exception as e:
+        logger.error(f"FAQ parsing failed: {e}")
+        return {
+            "FAQ_ITEMS": "Error processing FAQ analysis",
+            "TOTAL_ITEMS": "0",
+            "NOTES": f"Processing error: {str(e)}",
+            "RAW_JSON": analysis_text
+        }
+
+def update_faq_sheet(sheet_id, sheet_name, row_number, faq_fields):
+    """Update the FAQ sheet with analysis results"""
+    try:
+        creds = get_service_account_credentials(SHEETS_SCOPES)
+        service = build('sheets', 'v4', credentials=creds)
+        
+        # Prepare FAQ values (columns B through E)
+        faq_values = [
+            faq_fields["FAQ_ITEMS"],      # B: FAQ Items Found
+            faq_fields["TOTAL_ITEMS"],    # C: Number of Items
+            faq_fields["NOTES"],          # D: Analysis Notes
+            "Completed"                   # E: Processing Status
+        ]
+        
+        # Update range B to E for the specific row
+        update_range = f"{sheet_name}!B{row_number}:E{row_number}"
+        
+        service.spreadsheets().values().update(
+            spreadsheetId=sheet_id,
+            range=update_range,
+            valueInputOption="RAW",
+            body={"values": [faq_values]}
+        ).execute()
+        
+        logger.info(f"Updated FAQ sheet row {row_number} successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"FAQ sheet update failed: {e}")
+        raise Exception(f"FAQ sheet update failed: {str(e)}")
+
+# Add new FAQ endpoint
+@app.route('/analyze-faq', methods=['POST'])
+def analyze_faq():
+    """Endpoint specifically for FAQ processing"""
+    # Initialize file paths for cleanup
+    mp3_path = None
+    left_path = None
+    right_path = None
+    txt_path = None
+    
+    try:
+        data = request.json
+        
+        # Handle test requests
+        if data and data.get('test') == True:
+            logger.info("FAQ test request received")
+            return jsonify({"status": "success", "message": "FAQ webhook is working"})
+        
+        logger.info(f"Processing FAQ call: {data.get('file_name', 'unknown') if data else 'No data'}")
+        
+        # Validate required fields
+        if not data:
+            raise Exception("No JSON data received")
+            
+        required_fields = ['file_url', 'file_token', 'sheet_id', 'sheet_name', 
+                          'row_number', 'transcript_folder_id', 'file_name']
+        for field in required_fields:
+            if field not in data:
+                raise Exception(f"Missing required field: {field}")
+        
+        # Download and process audio (same as regular processing)
+        mp3_path = download_file(data['file_url'], data['file_token'])
+        left_path, right_path = split_channels(mp3_path)
+        
+        # Transcribe both channels
+        agent_text = transcribe(left_path)
+        patient_text = transcribe(right_path)
+        
+        # Reconstruct conversation
+        full_transcript = reconstruct_conversation(agent_text, patient_text)
+        
+        # FAQ-specific analysis
+        faq_analysis = analyze_faq_content(full_transcript)
+        faq_fields = parse_faq_analysis(faq_analysis)
+        
+        # Save FAQ transcript file
+        txt_path = mp3_path.replace(".mp3", "_faq_transcript.txt")
+        with open(txt_path, "w", encoding='utf-8') as f:
+            f.write("=== FULL CONVERSATION TRANSCRIPT ===\n\n")
+            f.write(full_transcript)
+            f.write("\n\n=== FAQ CONTENT ANALYSIS ===\n\n")
+            f.write(faq_analysis)
+        
+        # Upload to Drive and update FAQ sheet
+        transcript_link = upload_to_drive(txt_path, data["transcript_folder_id"])
+        update_faq_sheet(data["sheet_id"], data["sheet_name"], data["row_number"], faq_fields)
+        
+        logger.info(f"Successfully processed FAQ call: {data['file_name']}")
+        return jsonify({
+            "status": "success", 
+            "transcript_link": transcript_link,
+            "faq_fields": faq_fields
+        })
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error processing FAQ call: {error_msg}")
+        
+        # Try to update sheet with error status
+        try:
+            if 'data' in locals() and data:
+                creds = get_service_account_credentials(SHEETS_SCOPES)
+                service = build('sheets', 'v4', credentials=creds)
+                
+                error_range = f"{data['sheet_name']}!F{data['row_number']}"
+                service.spreadsheets().values().update(
+                    spreadsheetId=data["sheet_id"],
+                    range=error_range,
+                    valueInputOption="RAW",
+                    body={"values": [[f"ERROR: {error_msg}"]]}
+                ).execute()
+        except:
+            logger.error("Could not update FAQ sheet with error status")
+        
+        return jsonify({"error": error_msg}), 500
+        
+    finally:
+        # Clean up all temporary files
+        cleanup_files(mp3_path, left_path, right_path, txt_path)
